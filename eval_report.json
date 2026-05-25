@@ -1,0 +1,63 @@
+{
+  "poetry": {
+    "precision": 0.5813953488372093,
+    "recall": 0.625,
+    "f1-score": 0.6024096385542169,
+    "support": 40.0
+  },
+  "children": {
+    "precision": 0.8,
+    "recall": 0.7,
+    "f1-score": 0.7466666666666667,
+    "support": 40.0
+  },
+  "comics_graphic": {
+    "precision": 0.35555555555555557,
+    "recall": 0.4,
+    "f1-score": 0.3764705882352941,
+    "support": 40.0
+  },
+  "fantasy_paranormal": {
+    "precision": 0.6363636363636364,
+    "recall": 0.525,
+    "f1-score": 0.5753424657534246,
+    "support": 40.0
+  },
+  "history_biography": {
+    "precision": 0.5405405405405406,
+    "recall": 0.5,
+    "f1-score": 0.5194805194805194,
+    "support": 40.0
+  },
+  "mystery_thriller_crime": {
+    "precision": 0.75,
+    "recall": 0.9,
+    "f1-score": 0.8181818181818182,
+    "support": 40.0
+  },
+  "romance": {
+    "precision": 0.49056603773584906,
+    "recall": 0.65,
+    "f1-score": 0.5591397849462365,
+    "support": 40.0
+  },
+  "young_adult": {
+    "precision": 0.38461538461538464,
+    "recall": 0.25,
+    "f1-score": 0.30303030303030304,
+    "support": 40.0
+  },
+  "accuracy": 0.56875,
+  "macro avg": {
+    "precision": 0.5673795629560219,
+    "recall": 0.56875,
+    "f1-score": 0.5625902231060599,
+    "support": 320.0
+  },
+  "weighted avg": {
+    "precision": 0.5673795629560219,
+    "recall": 0.56875,
+    "f1-score": 0.5625902231060599,
+    "support": 320.0
+  }
+}
