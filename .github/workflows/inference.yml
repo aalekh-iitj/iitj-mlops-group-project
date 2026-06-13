@@ -1,21 +1,34 @@
 name: Inference
+
 on:
   workflow_dispatch:
     inputs:
       input_text:
-        description: 'Text to classify'
+        description: "Text to classify (sentiment)"
         required: true
+        default: "This movie was absolutely brilliant!"
 
 jobs:
   infer:
+    name: Run Sentiment Inference
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - env:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install inference dependencies
+        run: pip install transformers==4.40.2 torch==2.2.2 huggingface-hub==0.23.0 numpy==1.26.4
+
+      - name: Run inference
+        env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_MODEL_NAME: ${{ secrets.HF_MODEL_NAME }}
           INPUT_TEXT: ${{ github.event.inputs.input_text }}
         run: python src/inference.py

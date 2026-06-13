@@ -1,47 +1,38 @@
 """
-Utility functions and shared helpers
+Shared utilities: compute_metrics for Trainer, W&B helpers.
 """
-import torch
-from torch.utils.data import Dataset
+
 import json
+import os
 
-class TextClassificationDataset(Dataset):
-    """Custom dataset for text classification"""
-    def __init__(self, encodings, labels):
-        self.encodings = encodings
-        self.labels = labels
+import numpy as np
+from sklearn.metrics import accuracy_score, classification_report, f1_score
 
-    def __getitem__(self, idx):
-        item = {key: torch.tensor(val[idx])
-                for key, val in self.encodings.items()}
-        item['labels'] = torch.tensor(self.labels[idx])
-        return item
 
-    def __len__(self):
-        return len(self.labels)
+def compute_metrics(eval_pred):
+    """
+    Called by HuggingFace Trainer at each evaluation step.
+    Logs accuracy + weighted F1 to W&B automatically via report_to='wandb'.
+    """
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    acc = accuracy_score(labels, predictions)
+    f1 = f1_score(labels, predictions, average="weighted")
+    return {"accuracy": acc, "f1": f1}
 
-def load_json(file_path):
-    """Load JSON file"""
-    with open(file_path, 'r') as f:
-        return json.load(f)
 
-def save_json(data, file_path):
-    """Save data to JSON file"""
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=2)
+def load_id2label(path: str = "id2label.json") -> dict:
+    """Load id2label mapping; keys are coerced to int."""
+    with open(path) as f:
+        raw = json.load(f)
+    return {int(k): v for k, v in raw.items()}
 
-def get_device():
-    """Get available device (GPU or CPU)"""
-    if torch.cuda.is_available():
-        return torch.device('cuda')
-    else:
-        return torch.device('cpu')
 
-def print_model_info(model):
-    """Print model information"""
-    num_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {num_params:,}")
-    print(f"Device: {next(model.parameters()).device}")
+def print_classification_report(labels, predictions, id2label: dict):
+    """Pretty-print sklearn classification report with label names."""
+    target_names = [id2label[i] for i in sorted(id2label.keys())]
+    print(classification_report(labels, predictions, target_names=target_names))
 
-if __name__ == "__main__":
-    print("Utils module loaded successfully")
+
+def get_num_labels(id2label_path: str = "id2label.json") -> int:
+    return len(load_id2label(id2label_path))
