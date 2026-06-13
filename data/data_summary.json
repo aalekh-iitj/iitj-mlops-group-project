@@ -1,0 +1,31 @@
+{
+  "dataset": "fancyzhx/ag_news",
+  "total_samples": 39984,
+  "train_samples": 31987,
+  "test_samples": 7997,
+  "num_labels": 4,
+  "labels": [
+    "0",
+    "1",
+    "2",
+    "3"
+  ],
+  "class_distribution_train": {
+    "2": 7949,
+    "3": 7958,
+    "1": 8044,
+    "0": 8036
+  },
+  "class_distribution_test": {
+    "2": 1995,
+    "1": 1980,
+    "0": 2035,
+    "3": 1987
+  },
+  "cleaning_notes": [
+    "stripped whitespace and collapsed internal whitespace",
+    "dropped null / empty / duplicate texts",
+    "shuffled with fixed seed 42",
+    "sampled 40000 from full train split to stay under 50k"
+  ]
+}
