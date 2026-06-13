@@ -1,46 +1,38 @@
-# Python
+# Byte-compiled / packaging
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-.Python
 *.egg-info/
-dist/
 build/
-.eggs/
-venv/
+dist/
 .venv/
+venv/
 env/
 
-# Data files — never commit large datasets
-data/
-datasets/
-*.csv
-*.parquet
-*.arrow
-*.bin
-*.h5
-*.hdf5
-*.pkl
-*.pickle
-data_summary.json       # auto-generated, not required by rubric
-label2id.json           # auto-generated inverse mapping, not required
+# IDE / editor
+.vscode/
+.idea/
+.DS_Store
 
-# Model weights — push to HF Hub instead
-*.safetensors
-*.pt
-*.pth
-*.ckpt
-results/
-checkpoints/
+# Jupyter
+.ipynb_checkpoints/
 
-# Environment
-.env
-.env.*
-secrets.json
+# W&B / HF caches (NEVER commit)
 wandb/
 runs/
+hf_cache/
+huggingface/
+.cache/
 
-# OS
-.DS_Store
-Thumbs.db
+# Data (only id2label/label2id/data_summary JSONs are committed)
+data/processed/
+data/raw/
+*.parquet
+*.arrow
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Kaggle / Docker artefacts
+*.log
+kaggle/

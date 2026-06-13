@@ -1,69 +1,63 @@
-"""
-Loads and tokenises the SST-2 dataset.
-Used by both train.py (on Kaggle) and can be imported for local testing.
-"""
+"""Dataset loading + tokenisation used by both training and inference."""
+from __future__ import annotations
 
-import logging
+from typing import Dict, Tuple
 
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer
 
-log = logging.getLogger(__name__)
+from .utils import load_id2label, load_label2id
 
-MODEL_NAME = "distilbert-base-uncased"
+DEFAULT_MODEL = "distilbert-base-uncased"
 MAX_LENGTH = 128
 
 
-def get_tokenizer(model_name: str = MODEL_NAME):
-    """Load and return the tokenizer for the chosen model."""
-    log.info(f"Loading tokenizer: {model_name}")
-    return AutoTokenizer.from_pretrained(model_name)
+def load_text_dataset(csv_path: str, text_col: str, label_col: str) -> Dataset:
+    """Load a CSV with two columns: text and label (string)."""
+    ds = Dataset.from_csv(csv_path)
+    cols_to_drop = [c for c in ds.column_names if c not in (text_col, label_col)]
+    if cols_to_drop:
+        ds = ds.remove_columns(cols_to_drop)
+    return ds
 
 
-def load_and_tokenize(
-    model_name: str = MODEL_NAME,
+def encode_labels(example: Dict, label2id: Dict[str, int]) -> Dict:
+    example["label"] = label2id[example["label"]]
+    return example
+
+
+def prepare_dataset(
+    train_csv: str,
+    test_csv: str,
+    text_col: str = "text",
+    label_col: str = "label",
+    model_name: str = DEFAULT_MODEL,
     max_length: int = MAX_LENGTH,
-    sample_size: int = None,
-) -> DatasetDict:
-    """
-    Load SST-2, optionally subsample, tokenise with padding+truncation.
+) -> Tuple[DatasetDict, str]:
+    """Tokenise + align labels. Returns (tokenised DatasetDict, model_name)."""
+    label2id = load_label2id()
+    # sanity check: id2label must match
+    id2label = load_id2label()
+    assert len(label2id) == len(id2label), "id2label.json and label2id.json disagree on #labels"
 
-    Args:
-        model_name:  HF model identifier (must match tokenizer).
-        max_length:  Token sequence length (128 fits SST-2 well).
-        sample_size: If set, use only this many train+val examples
-                     (useful for fast debug runs on CPU).
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    Returns:
-        DatasetDict with 'train' and 'validation' keys, tokenised columns.
-    """
-    dataset = load_dataset("glue", "sst2")
-    tokenizer = get_tokenizer(model_name)
+    raw = DatasetDict(
+        {
+            "train": load_text_dataset(train_csv, text_col, label_col),
+            "test": load_text_dataset(test_csv, text_col, label_col),
+        }
+    )
+    raw = raw.map(lambda ex: encode_labels(ex, label2id))
 
-    if sample_size:
-        dataset["train"] = dataset["train"].select(
-            range(min(sample_size, len(dataset["train"])))
-        )
-        dataset["validation"] = dataset["validation"].select(
-            range(min(sample_size // 10, len(dataset["validation"])))
-        )
-        log.info(
-            f"Subsampled: train={len(dataset['train'])}, val={len(dataset['validation'])}"
-        )
-
-    def tokenize_batch(batch):
+    def tokenise(batch):
         return tokenizer(
-            batch["sentence"],
-            padding="max_length",
+            batch[text_col],
             truncation=True,
+            padding="max_length",
             max_length=max_length,
         )
 
-    tokenized = dataset.map(tokenize_batch, batched=True)
-    tokenized = tokenized.rename_column("label", "labels")
-    tokenized.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
-
-    log.info(
-        f"Tokenised — train: {len(tokenized['train'])}, val: {len(tokenized['validation'])}"
-    )
-    return tokenized
+    tokenised = raw.map(tokenise, batched=True, remove_columns=[text_col])
+    tokenised.set_format("torch")
+    return tokenised, model_name

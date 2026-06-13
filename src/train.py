@@ -1,142 +1,150 @@
-"""
-Model fine-tuning script.
-Run this inside a Kaggle Notebook — NOT in GitHub Actions.
-Supports two versions via VERSION env var: 'v1' or 'v2'.
+"""Training entrypoint — designed to run on Kaggle Notebooks (GPU T4)."""
+from __future__ import annotations
 
-Usage on Kaggle:
-    VERSION=v1 python src/train.py
-    VERSION=v2 python src/train.py
-"""
-
-import json
-import logging
+import argparse
 import os
+import random
 
+import numpy as np
+import torch
 import wandb
-from huggingface_hub import login
+from huggingface_hub import login as hf_login
+from kaggle_secrets import UserSecretsClient  # type: ignore
+from sklearn.metrics import accuracy_score, f1_score
 from transformers import (
     AutoModelForSequenceClassification,
-    EarlyStoppingCallback,
+    AutoTokenizer,
     Trainer,
     TrainingArguments,
 )
 
-from src.data import MODEL_NAME, get_tokenizer, load_and_tokenize
-from src.utils import compute_metrics, load_id2label
-
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
-
-# ── Hyperparameter configurations ─────────────────────────────────────────────
-CONFIGS = {
-    "v1": {
-        "num_train_epochs": 3,
-        "per_device_train_batch_size": 32,
-        "learning_rate": 3e-5,
-        "warmup_ratio": 0.1,
-        "weight_decay": 0.01,
-    },
-    "v2": {
-        "num_train_epochs": 4,
-        "per_device_train_batch_size": 16,
-        "learning_rate": 2e-5,
-        "warmup_ratio": 0.06,
-        "weight_decay": 0.05,
-    },
-}
-# v1 vs v2 differ in: batch size (32 vs 16), lr (3e-5 vs 2e-5), epochs (3 vs 4), weight_decay
+from .data import prepare_dataset
+from .utils import load_id2label, load_label2id, get_env
 
 
-def train(version: str = "v1", hf_model_repo: str = None):
-    version = version.lower()
-    cfg = CONFIGS[version]
-    id2label = load_id2label("id2label.json")
-    label2id = {v: k for k, v in id2label.items()}
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-    # ── W&B init ─────────────────────────────────────────────────────────────────
-    run = wandb.init(
-        project="iitj-mlops-group-project",
-        name=f"distilbert-sst2-{version}",
-        config={
-            "model": MODEL_NAME,
-            "version": version,
-            "platform": "Kaggle",
-            "dataset": "glue/sst2",
-            **cfg,
-        },
+
+def compute_metrics(pred):
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-1)
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average="weighted"),
+    }
+
+
+def load_secrets_kaggle() -> None:
+    """Pull WANDB_API_KEY and HF_TOKEN from Kaggle Secrets — never hardcode."""
+    secrets = UserSecretsClient()
+    os.environ["WANDB_API_KEY"] = secrets.get_secret("WANDB_API_KEY")
+    os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_csv", required=True, help="Path to processed train.csv")
+    parser.add_argument("--test_csv", required=True, help="Path to processed test.csv")
+    parser.add_argument("--model_name", default="distilbert-base-uncased")
+    parser.add_argument("--output_dir", default="./results")
+    parser.add_argument("--run_name", default="run-v1")
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--learning_rate", type=float, default=3e-5)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--push_to_hub", action="store_true", help="Push best model to HF Hub")
+    parser.add_argument("--hub_repo_id", default=None, help="e.g. your-username/mlops-a3-model")
+    args = parser.parse_args()
+
+    # 1) Secrets (Kaggle path)
+    try:
+        load_secrets_kaggle()
+    except Exception as e:  # local fallback
+        print(f"[warn] Kaggle secrets unavailable ({e}); assuming env vars are set.")
+
+    if not os.environ.get("WANDB_API_KEY"):
+        raise RuntimeError("WANDB_API_KEY not set in environment.")
+    if not os.environ.get("HF_TOKEN"):
+        raise RuntimeError("HF_TOKEN not set in environment.")
+
+    hf_login(token=os.environ["HF_TOKEN"])
+    wandb.login(key=os.environ["WANDB_API_KEY"])
+
+    # 2) Repro
+    set_seed(args.seed)
+
+    # 3) Data
+    tokenised, model_name = prepare_dataset(
+        train_csv=args.train_csv,
+        test_csv=args.test_csv,
+        model_name=args.model_name,
     )
+    id2label = load_id2label()
+    label2id = load_label2id()
 
-    # ── Load tokenised data ───────────────────────────────────────────────────────
-    tokenized = load_and_tokenize(model_name=MODEL_NAME)
-    train_ds = tokenized["train"]
-    val_ds = tokenized["validation"]
-
-    # ── Load model ────────────────────────────────────────────────────────────────
+    # 4) Model
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME,
-        num_labels=len(id2label),
+        model_name,
+        num_labels=len(label2id),
         id2label=id2label,
         label2id=label2id,
     )
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # ── Training arguments ───────────────────────────────────────────────────────
+    # 5) W&B run
+    wandb.init(
+        project="mlops-assignment3",
+        name=args.run_name,
+        config={
+            "model": model_name,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "seed": args.seed,
+            "platform": "Kaggle",
+        },
+    )
+
+    # 6) Trainer
     training_args = TrainingArguments(
-        output_dir=f"./results/{version}",
-        num_train_epochs=cfg["num_train_epochs"],
-        per_device_train_batch_size=cfg["per_device_train_batch_size"],
-        per_device_eval_batch_size=64,
-        learning_rate=cfg["learning_rate"],
-        warmup_ratio=cfg["warmup_ratio"],
-        weight_decay=cfg["weight_decay"],
+        output_dir=args.output_dir,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="f1",
+        learning_rate=args.learning_rate,
         report_to="wandb",
-        run_name=f"distilbert-sst2-{version}",
-        fp16=True,  # Enable on Kaggle GPU T4
-        logging_steps=50,
+        run_name=args.run_name,
+        logging_steps=20,
     )
-
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=val_ds,
+        train_dataset=tokenised["train"],
+        eval_dataset=tokenised["test"],
+        tokenizer=tokenizer,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
     )
-
-    log.info(f"Starting training: {version} | config: {cfg}")
     trainer.train()
+    eval_metrics = trainer.evaluate()
+    print(f"[eval] {eval_metrics}")
 
-    # ── Evaluate ──────────────────────────────────────────────────────────────────
-    results = trainer.evaluate()
-    log.info(f"Final eval results: {results}")
-    wandb.log(results)
-
-    # ── Push to Hugging Face Hub ──────────────────────────────────────────────────
-    if hf_model_repo:
-        tokenizer = get_tokenizer(MODEL_NAME)
-        model.push_to_hub(hf_model_repo)
-        tokenizer.push_to_hub(hf_model_repo)
-        hf_url = f"https://huggingface.co/{hf_model_repo}"
-        wandb.run.summary["huggingface_model_url"] = hf_url
-        log.info(f"Model pushed to HF Hub: {hf_url}")
+    # 7) Push to HF Hub (Task 5)
+    if args.push_to_hub and args.hub_repo_id:
+        trainer.push_to_hub(args.hub_repo_id)
+        wandb.run.summary["huggingface_model"] = f"https://huggingface.co/{args.hub_repo_id}"
+    elif args.push_to_hub and not args.hub_repo_id:
+        print("[warn] --push_to_hub set but --hub_repo_id missing; skipping upload.")
 
     wandb.finish()
-    return results
 
 
 if __name__ == "__main__":
-    # On Kaggle: load secrets, login, then run
-    HF_TOKEN = os.environ.get("HF_TOKEN", "")
-    HF_REPO = os.environ.get(
-        "HF_MODEL_REPO", ""
-    )  # e.g. "your-username/distilbert-sst2"
-    VERSION = os.environ.get("VERSION", "v1")
-
-    if HF_TOKEN:
-        login(token=HF_TOKEN)
-
-    train(version=VERSION, hf_model_repo=HF_REPO or None)
+    main()

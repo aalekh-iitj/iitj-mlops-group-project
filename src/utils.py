@@ -1,38 +1,49 @@
-"""
-Shared utilities: compute_metrics for Trainer, W&B helpers.
-"""
+"""Common utilities: label mapping, metric helpers, env loading."""
+from __future__ import annotations
 
 import json
 import os
-
-import numpy as np
-from sklearn.metrics import accuracy_score, classification_report, f1_score
-
-
-def compute_metrics(eval_pred):
-    """
-    Called by HuggingFace Trainer at each evaluation step.
-    Logs accuracy + weighted F1 to W&B automatically via report_to='wandb'.
-    """
-    logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-    acc = accuracy_score(labels, predictions)
-    f1 = f1_score(labels, predictions, average="weighted")
-    return {"accuracy": acc, "f1": f1}
+from pathlib import Path
+from typing import Dict
 
 
-def load_id2label(path: str = "id2label.json") -> dict:
-    """Load id2label mapping; keys are coerced to int."""
-    with open(path) as f:
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = REPO_ROOT / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
+ID2LABEL_PATH = DATA_DIR / "id2label.json"
+LABEL2ID_PATH = DATA_DIR / "label2id.json"
+DATA_SUMMARY_PATH = DATA_DIR / "data_summary.json"
+
+
+def load_id2label(path: Path = ID2LABEL_PATH) -> Dict[int, str]:
+    with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     return {int(k): v for k, v in raw.items()}
 
 
-def print_classification_report(labels, predictions, id2label: dict):
-    """Pretty-print sklearn classification report with label names."""
-    target_names = [id2label[i] for i in sorted(id2label.keys())]
-    print(classification_report(labels, predictions, target_names=target_names))
+def load_label2id(path: Path = LABEL2ID_PATH) -> Dict[str, int]:
+    with open(path, "r", encoding="utf-8") as f:
+        return {k: int(v) for k, v in json.load(f).items()}
 
 
-def get_num_labels(id2label_path: str = "id2label.json") -> int:
-    return len(load_id2label(id2label_path))
+def save_id2label(mapping: Dict[int, str], path: Path = ID2LABEL_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in sorted(mapping.items())}, f, indent=2)
+
+
+def save_label2id(mapping: Dict[str, int], path: Path = LABEL2ID_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({k: v for k, v in sorted(mapping.items(), key=lambda x: x[1])}, f, indent=2)
+
+
+def get_env(name: str, default: str | None = None, required: bool = False) -> str | None:
+    """Read an env var, optionally required."""
+    val = os.environ.get(name, default)
+    if required and not val:
+        raise RuntimeError(
+            f"Missing required environment variable: {name}. "
+            f"Add it to Kaggle Secrets (for training) or GitHub Actions secrets (for inference)."
+        )
+    return val

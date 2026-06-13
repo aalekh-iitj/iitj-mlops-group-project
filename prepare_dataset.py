@@ -1,126 +1,88 @@
-"""
-Task 2: Data Preparation & Normalisation
-Dataset: SST-2 (Stanford Sentiment Treebank) — binary sentiment
-Covers: inspection, cleaning, class distribution, label encoding, id2label.json
+"""Standalone data preparation script — run once locally (or in a Kaggle CPU notebook) to
+produce the clean train/test CSVs + id2label.json/label2id.json + data_summary.json.
+
+Default task: AG News (4-class topic classification) text dataset, kept under 50k samples
+per the assignment brief. Swap out `DATASET` / load_fn if your group picked a different one.
 """
 
+from __future__ import annotations
+
 import json
-import logging
-import os
-import re
 from collections import Counter
+from pathlib import Path
 
 import pandas as pd
 from datasets import load_dataset
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
-)
-log = logging.getLogger(__name__)
+from src.utils import DATA_DIR, PROCESSED_DIR, save_id2label, save_label2id
+
+SAMPLE_SIZE = 40000  # total; 80/20 split
+TEST_FRACTION = 0.2
+TEXT_COL = "text"
+LABEL_COL = "label"
+RANDOM_STATE = 42
 
 
-def inspect_dataset(dataset) -> None:
-    """Print structure, size, class distribution, and quality checks."""
-    log.info("=== Dataset Inspection ===")
-    for split, ds in dataset.items():
-        log.info(
-            f"  Split '{split}': {len(ds):,} examples | columns: {ds.column_names}"
-        )
+def main() -> None:
+    print("[1/4] Downloading AG News (≈30s, ~30k train + 1.9k test in HF cache)…")
+    ds = load_dataset("fancyzhx/ag_news", split="train")
+    # Shuffle, take a slice — well under 50k as required
+    ds = ds.shuffle(seed=RANDOM_STATE).select(range(min(SAMPLE_SIZE, len(ds))))
+    df = ds.to_pandas()
+    print(f"      loaded shape: {df.shape}, columns: {list(df.columns)}")
 
-    # Class distribution in training split
-    train_df = dataset["train"].to_pandas()
-    dist = Counter(train_df["label"].tolist())
-    log.info(f"  Train class distribution: {dict(dist)}")
-    log.info(f"  Null sentences: {train_df['sentence'].isnull().sum()}")
-    log.info(f"  Duplicate sentences: {train_df.duplicated(subset='sentence').sum()}")
-    log.info(
-        f"  Avg sentence length (chars): {train_df['sentence'].str.len().mean():.1f}"
-    )
-
-
-def clean_text(text: str) -> str:
-    """
-    Text normalisation steps (justified):
-    1. Strip leading/trailing whitespace  — removes accidental padding
-    2. Collapse multiple spaces → single  — noisy SST-2 entries have extra spaces
-    3. Remove HTML entities               — a few SST-2 sentences have & etc.
-    4. Lowercase                          — DistilBERT uncased; casing adds no signal
-    """
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"&", "&", text)
-    text = re.sub(r"<", "<", text)
-    text = re.sub(r">", ">", text)
-    text = text.lower()
-    return text
-
-
-def clean_split(dataset_split):
-    """Apply cleaning to a HF dataset split, drop nulls and duplicates."""
-    df = dataset_split.to_pandas()
-
+    print("[2/4] Cleaning…")
     before = len(df)
-    df["sentence"] = df["sentence"].apply(
-        lambda x: clean_text(str(x)) if pd.notnull(x) else None
+    # Text cleaning
+    df[TEXT_COL] = (
+        df[TEXT_COL].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
     )
-    df.dropna(subset=["sentence"], inplace=True)
-    df.drop_duplicates(subset="sentence", inplace=True)
-    after = len(df)
+    # Drop empties, duplicates, nulls
+    df = df.dropna(subset=[TEXT_COL, LABEL_COL])
+    df = df[df[TEXT_COL].str.len() > 0]
+    df = df.drop_duplicates(subset=[TEXT_COL])
+    # Label encoding — keep stable ordering from HF
+    unique_labels = sorted(df[LABEL_COL].unique().tolist())
+    label2id = {str(name): i for i, name in enumerate(unique_labels)}
+    id2label = {i: str(name) for name, i in label2id.items()}
+    df[LABEL_COL] = df[LABEL_COL].astype(str).map(label2id)
+    print(f"      dropped {before - len(df)} rows; remaining: {len(df)}")
 
-    log.info(f"  Cleaned: {before:,} → {after:,} rows ({before - after} removed)")
-    return df
+    print("[3/4] Train/test split + writing CSVs…")
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    train_df = df.sample(frac=1 - TEST_FRACTION, random_state=RANDOM_STATE)
+    test_df = df.drop(train_df.index)
+    train_df.to_csv(PROCESSED_DIR / "train.csv", index=False)
+    test_df.to_csv(PROCESSED_DIR / "test.csv", index=False)
 
+    save_id2label(id2label, DATA_DIR / "id2label.json")
+    save_label2id(label2id, DATA_DIR / "label2id.json")
 
-def save_id2label(label_names: list, out_path: str = "id2label.json") -> None:
-    """Save {int_id: label_name} mapping as required by rubric."""
-    mapping = {i: name for i, name in enumerate(label_names)}
-    with open(out_path, "w") as f:
-        json.dump(mapping, f, indent=2)
-    log.info(f"  Saved id2label → {out_path}: {mapping}")
-
-
-def main():
-    log.info("Loading SST-2 from Hugging Face datasets...")
-    dataset = load_dataset("nyu-mll/glue", "sst2")
-
-    # Step 1: Inspect
-    inspect_dataset(dataset)
-
-    # Step 2: Clean each split
-    log.info("Cleaning splits...")
-    train_df = clean_split(dataset["train"])
-    val_df = clean_split(dataset["validation"])
-
-    # Step 3: Label encoding — SST-2 already uses 0/1 integers
-    # 0 = negative, 1 = positive
-    label_names = dataset["train"].features["label"].names
-    log.info(f"Label names from HF: {label_names}")
-
-    # Step 4: Save id2label.json (required by rubric)
-    save_id2label(label_names, out_path="id2label.json")
-
-    # Step 5: Report final dataset summary (to stdout / logs, NOT committed to git)
     summary = {
-        "dataset": "glue/sst2",
-        "task": "binary sentiment classification",
-        "train_size": len(train_df),
-        "val_size": len(val_df),
-        "num_labels": len(label_names),
-        "label_names": label_names,
-        "cleaning_steps": [
-            "Strip whitespace",
-            "Collapse multiple spaces",
-            "Decode HTML entities",
-            "Lowercase",
-            "Drop null sentences",
-            "Drop duplicate sentences",
+        "dataset": "fancyzhx/ag_news",
+        "total_samples": int(len(df)),
+        "train_samples": int(len(train_df)),
+        "test_samples": int(len(test_df)),
+        "num_labels": len(unique_labels),
+        "labels": [str(x) for x in unique_labels],
+        "class_distribution_train": dict(Counter(train_df[LABEL_COL].tolist())),
+        "class_distribution_test": dict(Counter(test_df[LABEL_COL].tolist())),
+        "cleaning_notes": [
+            "stripped whitespace and collapsed internal whitespace",
+            "dropped null / empty / duplicate texts",
+            "shuffled with fixed seed 42",
+            f"sampled {SAMPLE_SIZE} from full train split to stay under 50k",
         ],
     }
-    log.info(f"Summary: {json.dumps(summary, indent=2)}")
-    log.info("Data preparation complete. id2label.json is ready.")
-    log.info(
-        "NOTE: Dataset itself is loaded from HF Hub at training time — not saved locally."
-    )
+    with open(DATA_DIR / "data_summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    print("[4/4] Done. Artefacts:")
+    print(f"      - {PROCESSED_DIR / 'train.csv'}")
+    print(f"      - {PROCESSED_DIR / 'test.csv'}")
+    print(f"      - {DATA_DIR / 'id2label.json'}  (committed)")
+    print(f"      - {DATA_DIR / 'label2id.json'}  (committed)")
+    print(f"      - {DATA_DIR / 'data_summary.json'}  (committed)")
 
 
 if __name__ == "__main__":
