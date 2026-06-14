@@ -1,20 +1,16 @@
 name: Inference
 
-# Triggers ONLY on manual dispatch. Training is intentionally NOT in CI —
-# all training happens on Kaggle Notebooks (free GPU). This workflow proves
-# the inference image / script can load the model and produce a prediction.
-
 on:
   workflow_dispatch:
     inputs:
       input_text:
         description: "Text to classify"
         required: true
-        default: "I love this assignment!"
+        default: "This assignment is amazing!"
       hf_model_name:
         description: "HF model repo to load"
         required: false
-        default: "distilbert-base-uncased"
+        default: "aalekh-iitj/results" #  actual HF model
 
 jobs:
   infer:
@@ -26,7 +22,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install inference deps
+      - name: Install inference dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -34,7 +30,6 @@ jobs:
       - name: Run inference
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           INPUT_TEXT: ${{ github.event.inputs.input_text }}
           HF_MODEL_NAME: ${{ github.event.inputs.hf_model_name }}
         run: |
